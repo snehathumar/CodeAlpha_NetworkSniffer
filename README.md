@@ -1,6 +1,6 @@
-# CodeAlpha_NetworkSniffer
+# CodeAlpha Cyber Security Internship - Task 2 : NetworkSniffer   
 
-**PacketLab - Network Packet Sniffer & Protocol Dissector** — a real Linux raw-socket packet sniffer built in pure Python 3 (`socket.AF_PACKET` + `struct`) paired with a TypeScript/React live capture workbench, loopback traffic generator, Layer 2/3/4 frame dissector, and Wireshark-compatible `.pcap` exporter/importer.
+**Network Packet Sniffer & Protocol Dissector** — a real Linux raw-socket packet sniffer built in pure Python 3 (`socket.AF_PACKET` + `struct`) paired with a TypeScript/React live capture workbench, loopback traffic generator, Layer 2/3/4 frame dissector, and Wireshark-compatible `.pcap` exporter/importer.
 
 ---
 
