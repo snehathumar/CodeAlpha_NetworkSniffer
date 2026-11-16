@@ -9,11 +9,16 @@ import {
   AlertCircle,
   Code2,
   Download,
+  Globe,
+  Info,
+  Network,
   Play,
   Radio,
+  Server,
   Square,
   Trash2,
   Upload,
+  Wifi,
 } from 'lucide-react';
 import { PacketTable } from './components/PacketTable';
 import { PacketDissector } from './components/PacketDissector';
@@ -23,8 +28,22 @@ import type {
   ProtocolFilter,
   RealPacket,
   SnifferStatusResponse,
+  TrafficKind,
 } from './types/sniffer';
 import { summarizePackets } from './utils/pcapParser';
+
+const TRAFFIC_ACTIONS: Array<{
+  type: TrafficKind;
+  label: string;
+  target: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { type: 'tcp', label: 'TCP Connect', target: '127.0.0.1:3000', Icon: Network },
+  { type: 'http', label: 'HTTP GET', target: '/api/health', Icon: Globe },
+  { type: 'udp', label: 'UDP Datagram', target: '127.0.0.1:9999', Icon: Radio },
+  { type: 'icmp', label: 'ICMP Ping', target: '127.0.0.1', Icon: Wifi },
+  { type: 'dns', label: 'DNS Lookup', target: 'A record / resolver', Icon: Server },
+];
 
 export default function App() {
   const [interfaces, setInterfaces] = useState<NetworkInterfaceInfo[]>([
@@ -38,6 +57,7 @@ export default function App() {
   const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
+  const [busyTraffic, setBusyTraffic] = useState<TrafficKind | null>(null);
 
   const [showPython, setShowPython] = useState(false);
   const [pythonSource, setPythonSource] = useState('');
@@ -102,14 +122,18 @@ export default function App() {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to start kernel capture.');
+        throw new Error(data.error || 'Raw packet capture needs root on Linux');
       }
       const status = data as SnifferStatusResponse;
       setCapturing(status.capturing);
       setPackets(status.packets);
-      setStatusNotice(`Live AF_PACKET socket bound on interface '${selectedIface}'.`);
+      if (status.error) {
+        setErrorBanner(status.error);
+      } else {
+        setStatusNotice(`Live AF_PACKET socket bound on interface '${selectedIface}'.`);
+      }
     } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : 'Unable to start capture.');
+      setErrorBanner(err instanceof Error ? err.message : 'Raw packet capture needs root on Linux');
     }
   };
 
@@ -139,16 +163,32 @@ export default function App() {
     }
   };
 
-  const handleSendProbe = async () => {
+  const handleGenerateTraffic = async (type: TrafficKind) => {
     setErrorBanner(null);
+    setBusyTraffic(type);
     try {
-      const res = await fetch('/api/sniffer/probe', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send local probe.');
-      setStatusNotice(data.message);
-      setTimeout(() => void fetchStatus(), 350);
+      const res = await fetch('/api/sniffer/traffic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        skipped?: boolean;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to generate local traffic.');
+      }
+      setStatusNotice(data.message ?? 'Traffic action completed.');
+      if (!data.skipped) {
+        setTimeout(() => void fetchStatus(), 350);
+      }
     } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : 'Probe error.');
+      setErrorBanner(err instanceof Error ? err.message : 'Traffic generation failed.');
+    } finally {
+      setBusyTraffic(null);
     }
   };
 
@@ -208,84 +248,119 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-      {/* Top Bar Contract: Single Repo/Project Title on Left, Single Primary Action on Right */}
-      <header className="sticky top-0 z-20 bg-white border-b border-slate-200 px-4 sm:px-6 py-3 flex items-center justify-between gap-4 sm:gap-8">
+      <header className="sticky top-0 z-20 bg-white border-b border-slate-200 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
             <Activity className="h-4 w-4" />
           </div>
-          <div className="flex items-center gap-2 min-w-0 text-sm">
-            <span className="hidden sm:inline font-mono font-semibold text-blue-700 whitespace-nowrap">
-              CodeAlpha_NetworkSniffer
-            </span>
-            <span className="hidden sm:inline text-slate-400" aria-hidden="true">
-              /
-            </span>
-            <h1 className="font-display font-bold text-slate-900 truncate">
-              Network Packet Sniffer
-            </h1>
-          </div>
+          <h1 className="font-display text-sm sm:text-base font-bold text-slate-900 truncate">
+            PacketLab - Network Packet Sniffer &amp; Protocol Dissector
+          </h1>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowPython((prev) => !prev)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
-        >
-          <Code2 className="h-3.5 w-3.5" />
-          <span>{showPython ? 'Hide sniffer.py' : 'View sniffer.py'}</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <a
+            href="/api/sniffer/download"
+            download="sniffer.py"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors whitespace-nowrap"
+          >
+            <Download className="h-3.5 w-3.5 text-blue-700" />
+            <span>Download sniffer.py</span>
+          </a>
+          <button
+            type="button"
+            onClick={() => setShowPython((prev) => !prev)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition-colors whitespace-nowrap"
+          >
+            <Code2 className="h-3.5 w-3.5" />
+            <span>{showPython ? 'Hide sniffer.py' : 'View sniffer.py'}</span>
+          </button>
+        </div>
       </header>
 
-      <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-5">
-        {/* 4-Column Live Capture Telemetry Strip */}
+      <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-4">
+        {/* Explicit Capture Scope Notice */}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-700">
+          <div className="flex items-center gap-2">
+            <Info className="h-4 w-4 text-blue-700 shrink-0" />
+            <span className="font-medium">
+              Capture source: this server&apos;s network interfaces, not your personal device.
+            </span>
+          </div>
+          <span
+            className={`font-mono font-semibold ${
+              capturing ? 'text-emerald-700' : 'text-slate-600'
+            }`}
+          >
+            Socket: {capturing ? `Capturing Live (${selectedIface})` : 'Standby'}
+          </span>
+        </div>
+
+        {/* Summary Bar: Total Packets, Count per Protocol, Top Source & Destination IPs */}
         <section
-          aria-label="Live Capture Metrics"
-          className="grid grid-cols-2 lg:grid-cols-4 bg-white border border-slate-200 rounded-xl divide-y lg:divide-y-0 lg:divide-x divide-slate-200"
+          aria-label="Packet Summary Bar"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 bg-white border border-slate-200 rounded-xl divide-y sm:divide-y-0 sm:divide-x divide-slate-200"
         >
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-slate-500">Captured Packets</p>
+          <div className="p-4">
+            <p className="text-xs font-medium text-slate-500">Total Captured</p>
             <p className="mt-1 text-2xl font-bold font-mono tabular-nums text-slate-900">
               {stats.totalPackets}
             </p>
-            <p className="mt-0.5 text-xs text-slate-500">AF_PACKET kernel buffer</p>
-          </div>
-
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-slate-500">Captured Bytes</p>
-            <p className="mt-1 text-2xl font-bold font-mono tabular-nums text-slate-900">
-              {stats.totalBytes} B
-            </p>
-            <p className="mt-0.5 text-xs text-slate-500">Raw Ethernet frames</p>
-          </div>
-
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-slate-500">Socket State</p>
-            <p
-              className={`mt-1 text-lg font-bold font-mono ${
-                capturing ? 'text-emerald-700' : 'text-slate-800'
-              }`}
-            >
-              {capturing ? 'Capturing Live' : 'Standby'}
-            </p>
-            <p className="mt-0.5 text-xs text-slate-500 font-mono">
-              iface: {selectedIface} · {captureProto}
+            <p className="mt-0.5 text-xs font-mono tabular-nums text-slate-500">
+              {stats.totalBytes} bytes · {captureProto} filter
             </p>
           </div>
 
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-slate-500">Protocol Split</p>
-            <p className="mt-1 text-sm font-mono font-semibold tabular-nums text-slate-900">
-              TCP {stats.counts.TCP} · HTTP {stats.counts.HTTP} · UDP {stats.counts.UDP}
-            </p>
-            <p className="mt-1 text-xs font-mono tabular-nums text-slate-500">
-              DNS {stats.counts.DNS} · ICMP {stats.counts.ICMP} · ARP {stats.counts.ARP}
-            </p>
+          <div className="p-4">
+            <p className="text-xs font-medium text-slate-500">Count per Protocol</p>
+            <div className="mt-1.5 grid grid-cols-3 gap-x-2 gap-y-1 text-xs font-mono tabular-nums text-slate-800">
+              <span>TCP: {stats.counts.TCP}</span>
+              <span>HTTP: {stats.counts.HTTP}</span>
+              <span>UDP: {stats.counts.UDP}</span>
+              <span>DNS: {stats.counts.DNS}</span>
+              <span>ICMP: {stats.counts.ICMP}</span>
+              <span>ARP: {stats.counts.ARP}</span>
+            </div>
+          </div>
+
+          <div className="p-4">
+            <p className="text-xs font-medium text-slate-500">Top Source IPs</p>
+            {stats.topSrcIps.length === 0 ? (
+              <p className="mt-1.5 text-xs text-slate-400 font-mono">No IP traffic yet</p>
+            ) : (
+              <ul className="mt-1 space-y-0.5 text-xs font-mono tabular-nums text-slate-800">
+                {stats.topSrcIps.map((entry) => (
+                  <li key={entry.ip} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{entry.ip}</span>
+                    <span className="text-slate-500 shrink-0">{entry.count}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="p-4">
+            <p className="text-xs font-medium text-slate-500">Top Destination IPs</p>
+            {stats.topDstIps.length === 0 ? (
+              <p className="mt-1.5 text-xs text-slate-400 font-mono">No IP traffic yet</p>
+            ) : (
+              <ul className="mt-1 space-y-0.5 text-xs font-mono tabular-nums text-slate-800">
+                {stats.topDstIps.map((entry) => (
+                  <li key={entry.ip} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{entry.ip}</span>
+                    <span className="text-slate-500 shrink-0">{entry.count}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </section>
 
-        {/* Capture Controls Bar */}
-        <section className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        {/* Capture & PCAP Controls Bar */}
+        <section
+          aria-label="Capture Controls"
+          className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+        >
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <label htmlFor="iface-select" className="text-xs font-medium text-slate-600">
@@ -317,13 +392,11 @@ export default function App() {
                 onChange={(e) => setCaptureProto(e.target.value as ProtocolFilter)}
                 className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-700 focus:outline-none disabled:opacity-60"
               >
-                {(['ALL', 'TCP', 'UDP', 'HTTP', 'DNS', 'ICMP', 'ARP'] as const).map(
-                  (p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  )
-                )}
+                {(['ALL', 'TCP', 'UDP', 'HTTP', 'DNS', 'ICMP', 'ARP'] as const).map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -349,15 +422,6 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void handleSendProbe()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap"
-            >
-              <Radio className="h-3.5 w-3.5 text-blue-700" />
-              Send Real Probe
-            </button>
-
             <input
               ref={fileInputRef}
               type="file"
@@ -392,6 +456,39 @@ export default function App() {
               <Trash2 className="h-3.5 w-3.5" />
               Clear
             </button>
+          </div>
+        </section>
+
+        {/* Real Local Traffic Generator Panel */}
+        <section
+          aria-label="Traffic Generator"
+          className="bg-white border border-slate-200 rounded-xl p-4 space-y-2.5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-xs font-bold uppercase tracking-wide text-slate-700">
+              Traffic Generator (Real Loopback Packets)
+            </h2>
+            <span className="text-xs text-slate-500">
+              Generates authentic OS socket traffic without requiring internet access
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {TRAFFIC_ACTIONS.map(({ type, label, target, Icon }) => {
+              const isBusy = busyTraffic === type;
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  disabled={busyTraffic !== null}
+                  onClick={() => void handleGenerateTraffic(type)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-60 transition-colors whitespace-nowrap"
+                >
+                  <Icon className="h-3.5 w-3.5 text-blue-700 shrink-0" />
+                  <span>{isBusy ? `${label}...` : label}</span>
+                  <span className="font-mono text-[11px] text-slate-500">{target}</span>
+                </button>
+              );
+            })}
           </div>
         </section>
 

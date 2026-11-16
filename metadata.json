@@ -1,6 +1,6 @@
 {
-  "name": "CodeAlpha Cyber Security Intern Portal — Thumar Sneha",
-  "description": "Personalized CodeAlpha Cyber Security Internship workspace, verified offer letter hub, task tracker, and security analysis lab for Student ID CA/DF1/326169.",
+  "name": "PacketLab - Network Packet Sniffer & Protocol Dissector",
+  "description": "Real Linux AF_PACKET raw-socket network packet sniffer, Layer 2/3/4 protocol dissector, local traffic generator, and Wireshark-compatible .pcap analyzer.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

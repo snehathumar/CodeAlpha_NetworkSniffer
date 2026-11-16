@@ -1,4 +1,4 @@
-import type { RealPacket } from '../types/sniffer';
+import type { IpRankEntry, PacketSummaryStats, RealPacket } from '../types/sniffer';
 
 export function formatHexDump(bytes: Uint8Array, maxBytes = 512): string {
   const slice = bytes.slice(0, maxBytes);
@@ -336,7 +336,14 @@ export function parsePcapBuffer(buffer: Uint8Array): RealPacket[] {
   return packets;
 }
 
-export function summarizePackets(packets: RealPacket[]) {
+function rankTopIps(freqMap: Map<string, number>, limit = 3): IpRankEntry[] {
+  return Array.from(freqMap.entries())
+    .sort((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0].localeCompare(b[0])))
+    .slice(0, limit)
+    .map(([ip, count]) => ({ ip, count }));
+}
+
+export function summarizePackets(packets: RealPacket[]): PacketSummaryStats {
   const counts: Record<string, number> = {
     TCP: 0,
     UDP: 0,
@@ -347,6 +354,8 @@ export function summarizePackets(packets: RealPacket[]) {
     OTHER: 0,
   };
   let totalBytes = 0;
+  const srcCounts = new Map<string, number>();
+  const dstCounts = new Map<string, number>();
 
   for (const pkt of packets) {
     totalBytes += pkt.length;
@@ -355,11 +364,19 @@ export function summarizePackets(packets: RealPacket[]) {
     } else {
       counts.OTHER += 1;
     }
+    if (pkt.srcIp && pkt.srcIp !== '-') {
+      srcCounts.set(pkt.srcIp, (srcCounts.get(pkt.srcIp) ?? 0) + 1);
+    }
+    if (pkt.dstIp && pkt.dstIp !== '-') {
+      dstCounts.set(pkt.dstIp, (dstCounts.get(pkt.dstIp) ?? 0) + 1);
+    }
   }
 
   return {
     totalPackets: packets.length,
     totalBytes,
     counts,
+    topSrcIps: rankTopIps(srcCounts),
+    topDstIps: rankTopIps(dstCounts),
   };
 }

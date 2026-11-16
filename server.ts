@@ -1,15 +1,22 @@
 import 'dotenv/config';
 import express from 'express';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import dgram from 'node:dgram';
+import dns from 'node:dns';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import type { NetworkInterfaceInfo, ProtocolFilter, RealPacket } from './src/types/sniffer';
+import type {
+  NetworkInterfaceInfo,
+  ProtocolFilter,
+  RealPacket,
+  TrafficKind,
+} from './src/types/sniffer';
 import { buildPcapBuffer, parsePcapBuffer } from './src/utils/pcapParser';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,6 +33,23 @@ const StartSchema = z.object({
 const UploadPcapSchema = z.object({
   base64: z.string().min(32).max(8_000_000),
 });
+
+const TrafficSchema = z.object({
+  type: z.enum(['tcp', 'http', 'udp', 'icmp', 'dns']),
+});
+
+function formatSnifferError(rawMsg: string): string {
+  const lower = rawMsg.toLowerCase();
+  if (
+    lower.includes('permissionerror') ||
+    lower.includes('operation not permitted') ||
+    lower.includes('cap_net_raw') ||
+    lower.includes('needs root')
+  ) {
+    return 'Raw packet capture needs root on Linux';
+  }
+  return rawMsg;
+}
 
 function getOsInterfaces(): NetworkInterfaceInfo[] {
   const raw = os.networkInterfaces();
@@ -89,7 +113,7 @@ class SnifferManager {
     child.stderr.on('data', (chunk: Buffer) => {
       const msg = chunk.toString('utf8').trim();
       if (msg) {
-        this.lastError = msg;
+        this.lastError = formatSnifferError(msg);
       }
     });
 
@@ -105,7 +129,7 @@ class SnifferManager {
     });
 
     child.on('error', (err) => {
-      this.lastError = err.message;
+      this.lastError = formatSnifferError(err.message);
       this.capturing = false;
       this.proc = null;
     });
@@ -148,15 +172,120 @@ class SnifferManager {
   }
 }
 
+async function runRealLocalTraffic(
+  type: TrafficKind,
+  port: number
+): Promise<{ ok: boolean; skipped?: boolean; message: string }> {
+  if (type === 'tcp') {
+    await new Promise<void>((resolve, reject) => {
+      const socket = net.createConnection({ host: '127.0.0.1', port }, () => {
+        socket.end();
+        resolve();
+      });
+      socket.setTimeout(1500, () => {
+        socket.destroy();
+        reject(new Error(`TCP connect to 127.0.0.1:${port} timed out.`));
+      });
+      socket.on('error', (err) => reject(err));
+    });
+    return { ok: true, message: `Executed real TCP handshake to 127.0.0.1:${port}.` };
+  }
+
+  if (type === 'http') {
+    await new Promise<void>((resolve, reject) => {
+      const req = http.get(`http://127.0.0.1:${port}/api/health`, (resp) => {
+        resp.resume();
+        resp.on('end', () => resolve());
+      });
+      req.on('error', (err) => reject(err));
+      req.setTimeout(1500, () => {
+        req.destroy();
+        reject(new Error(`HTTP GET to 127.0.0.1:${port}/api/health timed out.`));
+      });
+    });
+    return { ok: true, message: `Sent real HTTP GET to 127.0.0.1:${port}/api/health.` };
+  }
+
+  if (type === 'udp') {
+    await new Promise<void>((resolve, reject) => {
+      const udp = dgram.createSocket('udp4');
+      const msg = Buffer.from('PacketLab_Real_Local_UDP_Probe');
+      udp.on('error', (err) => {
+        udp.close();
+        reject(err);
+      });
+      udp.send(msg, 9999, '127.0.0.1', (err) => {
+        udp.close();
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    return { ok: true, message: 'Sent real UDP datagram to 127.0.0.1:9999.' };
+  }
+
+  if (type === 'icmp') {
+    return new Promise((resolve) => {
+      execFile(
+        'ping',
+        ['-c', '1', '-W', '1', '127.0.0.1'],
+        { timeout: 2000 },
+        (err, _stdout, stderr) => {
+          if (err) {
+            const detail = (stderr || err.message || '').trim();
+            resolve({
+              ok: false,
+              skipped: true,
+              message: `ICMP ping skipped: not permitted or unavailable in this environment${detail ? ` (${detail.split('\n')[0]})` : ''}.`,
+            });
+            return;
+          }
+          resolve({ ok: true, message: 'Sent real ICMP Echo Request to 127.0.0.1.' });
+        }
+      );
+    });
+  }
+
+  // DNS lookup (gracefully skipped if external/local DNS resolver is unreachable)
+  return new Promise((resolve) => {
+    const resolver = new dns.Resolver({ timeout: 1200, tries: 1 });
+    resolver.resolve4('example.com', (err, addresses) => {
+      if (err) {
+        // Fallback to OS resolver for localhost if UDP/53 resolver is unreachable
+        dns.lookup('localhost', (lookupErr, addr) => {
+          if (lookupErr) {
+            resolve({
+              ok: false,
+              skipped: true,
+              message: `DNS lookup skipped: DNS resolver unreachable in offline sandbox (${err.code || err.message}).`,
+            });
+            return;
+          }
+          resolve({
+            ok: false,
+            skipped: true,
+            message: `DNS UDP/53 query skipped (${err.code || 'offline'}); OS hosts lookup resolved localhost -> ${addr}.`,
+          });
+        });
+        return;
+      }
+      resolve({
+        ok: true,
+        message: `Executed real DNS A-record query for example.com -> ${addresses[0] ?? 'resolved'}.`,
+      });
+    });
+  });
+}
+
 async function startServer() {
   const app = express();
   const sniffer = new SnifferManager();
+  const port = Number(process.env.PORT || 3000);
 
   // Top-level JSON deserialization mounted before all route handlers
   app.use(express.json({ limit: '10mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'codealpha-network-sniffer' });
+    res.json({ ok: true, service: 'packetlab-network-sniffer' });
   });
 
   app.get('/api/sniffer/interfaces', (_req, res) => {
@@ -199,37 +328,20 @@ async function startServer() {
     res.json(sniffer.getStatus());
   });
 
-  /**
-   * Executes a real local UDP datagram + local HTTP GET request across 127.0.0.1
-   * so AF_PACKET captures authentic OS loopback frames even in isolated sandboxes.
-   */
-  app.post('/api/sniffer/probe', async (_req, res) => {
+  app.post('/api/sniffer/traffic', async (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const parsed = TrafficSchema.safeParse(body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid traffic generator action.' });
+      return;
+    }
+
     try {
-      await new Promise<void>((resolve) => {
-        const udp = dgram.createSocket('udp4');
-        const msg = Buffer.from('CodeAlpha_NetworkSniffer_Real_UDP_Probe');
-        udp.send(msg, 9999, '127.0.0.1', () => {
-          udp.close();
-          resolve();
-        });
-      });
-
-      await new Promise<void>((resolve) => {
-        const req = http.get('http://127.0.0.1:3000/api/health', (resp) => {
-          resp.resume();
-          resp.on('end', () => resolve());
-        });
-        req.on('error', () => resolve());
-        req.setTimeout(1500, () => {
-          req.destroy();
-          resolve();
-        });
-      });
-
-      res.json({ ok: true, message: 'Sent real UDP:9999 and HTTP:3000 loopback probes.' });
+      const result = await runRealLocalTraffic(parsed.data.type, port);
+      res.json(result);
     } catch (error) {
       res.status(500).json({
-        error: error instanceof Error ? error.message : 'Probe execution failed.',
+        error: error instanceof Error ? error.message : 'Traffic generation failed.',
       });
     }
   });
@@ -244,7 +356,7 @@ async function startServer() {
     res.setHeader('Content-Type', 'application/vnd.tcpdump.pcap');
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="codealpha_capture.pcap"'
+      'attachment; filename="packetlab_capture.pcap"'
     );
     res.send(Buffer.from(pcapBytes));
   });
@@ -282,6 +394,17 @@ async function startServer() {
     }
   });
 
+  app.get('/api/sniffer/download', async (_req, res) => {
+    try {
+      const code = await fs.readFile(SNIFFER_SCRIPT, 'utf8');
+      res.setHeader('Content-Type', 'text/x-python; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="sniffer.py"');
+      res.send(code);
+    } catch {
+      res.status(404).json({ error: 'sniffer.py not found on server.' });
+    }
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -297,9 +420,8 @@ async function startServer() {
     });
   }
 
-  const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, '0.0.0.0', () => {
-    console.log(`CodeAlpha_NetworkSniffer running on http://0.0.0.0:${port}`);
+    console.log(`PacketLab running on http://0.0.0.0:${port}`);
   });
 
   const cleanup = () => {

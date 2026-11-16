@@ -78,13 +78,46 @@ test('parsePcapBuffer rejects invalid magic headers cleanly', () => {
   );
 });
 
-test('summarizePackets and formatHexDump compute accurate byte metrics', () => {
+test('buildPcapBuffer writes standard Wireshark libpcap global header fields', () => {
   const frame = createSampleEthernetTcpHttpFrame();
-  const pkt = dissectEthernetBytes(frame, 1);
-  const stats = summarizePackets([pkt]);
-  assert.equal(stats.totalPackets, 1);
-  assert.equal(stats.totalBytes, frame.length);
+  const original = dissectEthernetBytes(frame, 1, Date.UTC(2026, 10, 13, 12, 0, 0));
+  const pcapBytes = buildPcapBuffer([original]);
+  const view = new DataView(pcapBytes.buffer);
+
+  assert.equal(view.getUint32(0, true), 0xa1b2c3d4);
+  assert.equal(view.getUint16(4, true), 2);
+  assert.equal(view.getUint16(6, true), 4);
+  assert.equal(view.getUint32(16, true), 65535);
+  assert.equal(view.getUint32(20, true), 1);
+  assert.equal(pcapBytes.length, 24 + 16 + frame.length);
+});
+
+test('summarizePackets and formatHexDump compute counts and top source/destination IPs', () => {
+  const frame = createSampleEthernetTcpHttpFrame();
+  const pkt1 = dissectEthernetBytes(frame, 1);
+  const pkt2 = {
+    ...pkt1,
+    number: 2,
+    protocol: 'TCP',
+    srcIp: '10.0.0.5',
+    dstIp: '10.0.0.2',
+  };
+  const pkt3 = {
+    ...pkt1,
+    number: 3,
+    protocol: 'UDP',
+    srcIp: '10.0.0.5',
+    dstIp: '127.0.0.1',
+  };
+
+  const stats = summarizePackets([pkt1, pkt2, pkt3]);
+  assert.equal(stats.totalPackets, 3);
+  assert.equal(stats.totalBytes, frame.length * 3);
   assert.equal(stats.counts.HTTP, 1);
+  assert.equal(stats.counts.TCP, 1);
+  assert.equal(stats.counts.UDP, 1);
+  assert.deepEqual(stats.topSrcIps[0], { ip: '10.0.0.5', count: 2 });
+  assert.deepEqual(stats.topDstIps[0], { ip: '127.0.0.1', count: 2 });
 
   const hex = formatHexDump(new Uint8Array([0x47, 0x45, 0x54]));
   assert.match(hex, /^0000\s+47 45 54/);

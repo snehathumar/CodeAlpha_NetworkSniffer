@@ -19,16 +19,6 @@ export function PythonSourceView({ code, onClose }: PythonSourceViewProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownload = () => {
-    const blob = new Blob([code], { type: 'text/x-python' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'sniffer.py';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <section
       aria-label="Standalone Python Sniffer Source Code"
@@ -40,7 +30,7 @@ export function PythonSourceView({ code, onClose }: PythonSourceViewProps) {
             Standalone Python CLI Source (sniffer.py)
           </h2>
           <p className="text-xs text-slate-600">
-            Pure Python 3 raw-socket sniffer (<code className="font-mono text-slate-800">socket.AF_PACKET</code>) ready to push to <code className="font-mono text-slate-800">CodeAlpha_NetworkSniffer</code>.
+            Pure Python 3 raw-socket sniffer (<code className="font-mono text-slate-800">socket.AF_PACKET</code>) for Linux with Wireshark <code className="font-mono text-slate-800">.pcap</code> export.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -61,14 +51,14 @@ export function PythonSourceView({ code, onClose }: PythonSourceViewProps) {
               </>
             )}
           </button>
-          <button
-            type="button"
-            onClick={handleDownload}
+          <a
+            href="/api/sniffer/download"
+            download="sniffer.py"
             className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 whitespace-nowrap"
           >
             <Download className="h-3.5 w-3.5" />
             <span>Download sniffer.py</span>
-          </button>
+          </a>
           <button
             type="button"
             onClick={onClose}

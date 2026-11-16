@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-CodeAlpha Cyber Security Internship — Task 1: Basic Network Sniffer
-Repository: CodeAlpha_NetworkSniffer
+PacketLab - Network Packet Sniffer & Protocol Dissector
+Standalone Linux Raw-Socket Packet Capture CLI (CodeAlpha_NetworkSniffer)
 
 Captures live network packets from Linux network interfaces using raw AF_PACKET
 sockets (pure Python standard library, no external dependencies required),
-dissects Ethernet, IPv4, TCP, UDP, ICMP, DNS, and HTTP headers, and optionally
-exports captures to standard Wireshark-compatible .pcap files.
+dissects Ethernet, IPv4, TCP, UDP, ICMP, DNS, ARP, and HTTP headers, and
+optionally exports captures to standard Wireshark-compatible .pcap files.
 
 Usage:
   sudo python3 sniffer.py --iface all --count 25
-  sudo python3 sniffer.py --iface lo --proto TCP --pcap capture.pcap
-  sudo python3 sniffer.py --iface all --json
+  sudo python3 sniffer.py --iface all --count 25 --pcap capture.pcap
+  sudo python3 sniffer.py --iface lo --proto TCP --json
 """
 
 import argparse
@@ -311,7 +311,7 @@ class PcapWriter:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="CodeAlpha Task 1: Real Linux Raw-Socket Network Packet Sniffer"
+        description="PacketLab - Real Linux Raw-Socket Network Packet Sniffer"
     )
     parser.add_argument(
         "--iface",
@@ -358,7 +358,7 @@ def main() -> None:
         sock.settimeout(0.5)
     except PermissionError:
         print(
-            "Error: Root privileges or CAP_NET_RAW required. Run with: sudo python3 sniffer.py",
+            "Raw packet capture needs root on Linux",
             file=sys.stderr,
         )
         sys.exit(1)

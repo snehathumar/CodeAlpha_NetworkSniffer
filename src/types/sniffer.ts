@@ -1,5 +1,7 @@
 export type ProtocolFilter = 'ALL' | 'TCP' | 'UDP' | 'HTTP' | 'DNS' | 'ICMP' | 'ARP';
 
+export type TrafficKind = 'tcp' | 'http' | 'udp' | 'icmp' | 'dns';
+
 export interface RealPacket {
   number: number;
   timestamp: string;
@@ -38,4 +40,17 @@ export interface SnifferStatusResponse {
   totalCaptured: number;
   packets: RealPacket[];
   error: string | null;
+}
+
+export interface IpRankEntry {
+  ip: string;
+  count: number;
+}
+
+export interface PacketSummaryStats {
+  totalPackets: number;
+  totalBytes: number;
+  counts: Record<string, number>;
+  topSrcIps: IpRankEntry[];
+  topDstIps: IpRankEntry[];
 }
